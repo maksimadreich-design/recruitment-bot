@@ -1,9 +1,8 @@
 import asyncio
-import http.server
 import logging
 import os
 import sys
-import threading
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -24,25 +23,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"OK - AI Recruitment Bot is live 24/7 on Render!")
+async def start_web_server(port: int):
+    """Start async web server for Render health checks."""
+    app = web.Application()
+    async def health(request):
+        return web.Response(text="OK - AI Recruitment Bot is live 24/7 on Render!")
 
-    def log_message(self, format, *args):
-        # Silence default server access logs to keep log clean
-        pass
-
-def run_health_server_in_background(port: int):
-    """Run standard Python HTTP server in daemon thread to satisfy Render health check."""
-    try:
-        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        logger.info("Health check server bound successfully to port %d", port)
-        server.serve_forever()
-    except Exception as e:
-        logger.error("Failed to bind health check server on port %d: %s", port, e)
+    app.router.add_get("/", health)
+    app.router.add_get("/healthz", health)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health check web server running on 0.0.0.0:%d", port)
+    return runner
 
 async def setup_bot_commands(bot: Bot):
     commands = [
@@ -72,15 +67,12 @@ async def main():
         logger.error("BOT_TOKEN is missing in environment/.env! Please set it before running.")
         sys.exit(1)
 
-    # Start background health server for Render / Cloud
-    port_env = os.environ.get("PORT")
-    if port_env and port_env.isdigit():
-        port = int(port_env)
-        t = threading.Thread(target=run_health_server_in_background, args=(port,), daemon=True)
-        t.start()
-
     logger.info("Initializing SQLite database...")
     await db.init_db()
+
+    # Start health check server on port assigned by Render or default 10000
+    port = int(os.environ.get("PORT", "10000"))
+    web_runner = await start_web_server(port)
 
     bot = Bot(
         token=config.BOT_TOKEN,
@@ -105,6 +97,7 @@ async def main():
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await bot.session.close()
+        await web_runner.cleanup()
         logger.info("Bot session closed.")
 
 if __name__ == "__main__":
