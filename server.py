@@ -32,9 +32,9 @@ bot_instance = None
 dp_instance = None
 
 async def keep_alive_loop():
-    """Keeps Render free service awake 24/7 by pinging itself every 3 minutes."""
+    """Keeps Render free service awake 24/7 by pinging itself every 8 minutes."""
     url = os.environ.get("RENDER_EXTERNAL_URL", "https://recruitment-bot-5i3h.onrender.com") + "/healthz"
-    await asyncio.sleep(30)
+    await asyncio.sleep(60) # Wait 1 minute after boot
     while True:
         try:
             async with aiohttp.ClientSession() as session:
@@ -42,12 +42,12 @@ async def keep_alive_loop():
                     logger.info("Keep-alive self ping: status %d", resp.status)
         except Exception as e:
             logger.debug("Keep-alive ping note: %s", e)
-        await asyncio.sleep(180) # 3 minutes
+        await asyncio.sleep(480) # 8 minutes
 
 async def run_bot():
     global bot_instance, dp_instance
     try:
-        logger.info("Initializing SQLite database on Render...")
+        logger.info("Initializing SQLite database...")
         await db.init_db()
 
         bot_instance = Bot(
