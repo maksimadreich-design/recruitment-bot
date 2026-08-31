@@ -48,10 +48,12 @@ async def keep_alive_loop():
             logger.debug("Keep-alive ping note: %s", e)
         await asyncio.sleep(300) # Every 5 minutes
 
-async def run_bot():
+async def run_bot_worker():
     global bot_instance, dp_instance
+    # Wait 5 seconds for web server to be live
+    await asyncio.sleep(5)
     try:
-        logger.info("Initializing SQLite database...")
+        logger.info("Initializing SQLite database on Render...")
         await db.init_db()
 
         bot_instance = Bot(
@@ -64,28 +66,27 @@ async def run_bot():
 
         await setup_bot_commands(bot_instance)
 
+        # Clear any old webhook and start polling
         try:
-            await bot_instance.set_webhook(
-                url=WEBHOOK_URL,
-                drop_pending_updates=True,
-                allowed_updates=dp_instance.resolve_used_update_types()
-            )
-            logger.info("Telegram Webhook set successfully to %s", WEBHOOK_URL)
+            await bot_instance.delete_webhook(drop_pending_updates=True)
         except Exception as e:
-            logger.error("Failed to set webhook: %s", e)
+            logger.warning("Webhook delete note: %s", e)
 
-        logger.info("Bot background worker initialized successfully.")
+        logger.info("Starting Telegram Bot polling loop on Render...")
+        await dp_instance.start_polling(bot_instance, allowed_updates=dp_instance.resolve_used_update_types())
+    except asyncio.CancelledError:
+        logger.info("Bot worker cancelled.")
     except Exception as e:
-        logger.error("Error in bot background task: %s", e, exc_info=True)
+        logger.error("Error in bot worker: %s", e, exc_info=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global bot_task, keep_alive_task
-    logger.info("FastAPI Server starting up on Render...")
-    bot_task = asyncio.create_task(run_bot())
+    logger.info("FastAPI Web Server starting up on Render...")
+    bot_task = asyncio.create_task(run_bot_worker())
     keep_alive_task = asyncio.create_task(keep_alive_loop())
     yield
-    logger.info("FastAPI Server shutting down...")
+    logger.info("FastAPI Web Server shutting down...")
     if bot_task:
         bot_task.cancel()
     if keep_alive_task:
@@ -95,22 +96,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Recruitment Bot", lifespan=lifespan)
 
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    """Processes incoming Telegram updates via Webhook."""
-    try:
-        data = await request.json()
-        if bot_instance and dp_instance:
-            update = Update.model_validate(data, context={"bot": bot_instance})
-            await dp_instance.feed_update(bot_instance, update)
-        return JSONResponse(content={"ok": True})
-    except Exception as e:
-        logger.error("Error in webhook update: %s", e, exc_info=True)
-        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
-
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "OK - AI Recruitment Bot is live 24/7 on Render!"
+    return "OK - AI Recruitment Bot is live and running 24/7 on Render!"
 
 @app.get("/healthz", response_class=PlainTextResponse)
 async def healthz():
