@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import sys
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -20,6 +22,21 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+async def handle_health_check(request):
+    """Health check endpoint for Render/Cloud platforms."""
+    return web.Response(text="AI Recruitment Bot is running healthy 24/7!", content_type="text/plain")
+
+async def start_health_server(port: int):
+    """Starts a lightweight HTTP server on the port assigned by Render."""
+    app = web.Application()
+    app.router.add_get("/", handle_health_check)
+    app.router.add_get("/healthz", handle_health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health check web server running on port %d", port)
 
 async def setup_bot_commands(bot: Bot):
     commands = [
@@ -51,6 +68,11 @@ async def main():
 
     logger.info("Initializing SQLite database...")
     await db.init_db()
+
+    # If running on Render or any cloud with $PORT, start health server
+    port = int(os.environ.get("PORT", "0"))
+    if port > 0:
+        await start_health_server(port)
 
     bot = Bot(
         token=config.BOT_TOKEN,
