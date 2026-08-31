@@ -102,7 +102,7 @@ async def on_shutdown(app: web.Application):
             pass
         await bot_instance.session.close()
 
-def create_app() -> web.Application:
+async def create_app() -> web.Application:
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, telegram_webhook_handler)
     app.router.add_get("/healthz", healthz_handler)
@@ -113,5 +113,7 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
-    app = create_app()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    app = loop.run_until_complete(create_app())
     web.run_app(app, host="0.0.0.0", port=port)
