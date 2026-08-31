@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import sys
+import aiohttp
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
@@ -25,13 +27,27 @@ logging.basicConfig(
 logger = logging.getLogger("server")
 
 bot_task = None
+keep_alive_task = None
 bot_instance = None
 dp_instance = None
+
+async def keep_alive_loop():
+    """Keeps Render free service awake 24/7 by pinging itself every 8 minutes."""
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://recruitment-bot-5i3h.onrender.com") + "/healthz"
+    await asyncio.sleep(60) # Wait 1 minute after boot
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as resp:
+                    logger.info("Keep-alive self ping: status %d", resp.status)
+        except Exception as e:
+            logger.debug("Keep-alive ping note: %s", e)
+        await asyncio.sleep(480) # 8 minutes
 
 async def run_bot():
     global bot_instance, dp_instance
     try:
-        logger.info("Initializing database...")
+        logger.info("Initializing SQLite database...")
         await db.init_db()
 
         bot_instance = Bot(
@@ -50,7 +66,7 @@ async def run_bot():
         except Exception as e:
             logger.warning("Webhook drop: %s", e)
 
-        logger.info("Starting Telegram Bot Polling in background...")
+        logger.info("Telegram Bot Polling started successfully on Render!")
         await dp_instance.start_polling(bot_instance, allowed_updates=dp_instance.resolve_used_update_types())
     except asyncio.CancelledError:
         logger.info("Bot background task cancelled.")
@@ -59,17 +75,16 @@ async def run_bot():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bot_task
+    global bot_task, keep_alive_task
     logger.info("FastAPI Server starting up on Render...")
     bot_task = asyncio.create_task(run_bot())
+    keep_alive_task = asyncio.create_task(keep_alive_loop())
     yield
     logger.info("FastAPI Server shutting down...")
     if bot_task:
         bot_task.cancel()
-        try:
-            await bot_task
-        except asyncio.CancelledError:
-            pass
+    if keep_alive_task:
+        keep_alive_task.cancel()
     if bot_instance:
         await bot_instance.session.close()
 
@@ -82,3 +97,8 @@ async def root():
 @app.get("/healthz", response_class=PlainTextResponse)
 async def healthz():
     return "OK"
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", "10000"))
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
