@@ -1,8 +1,9 @@
 import asyncio
+import http.server
 import logging
 import os
 import sys
-from aiohttp import web
+import threading
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -23,20 +24,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def handle_health_check(request):
-    """Health check endpoint for Render/Cloud platforms."""
-    return web.Response(text="AI Recruitment Bot is running healthy 24/7!", content_type="text/plain")
+class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"OK - AI Recruitment Bot is live 24/7 on Render!")
 
-async def start_health_server(port: int):
-    """Starts a lightweight HTTP server on the port assigned by Render."""
-    app = web.Application()
-    app.router.add_get("/", handle_health_check)
-    app.router.add_get("/healthz", handle_health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Health check web server running on port %d", port)
+    def log_message(self, format, *args):
+        # Silence default server access logs to keep log clean
+        pass
+
+def run_health_server_in_background(port: int):
+    """Run standard Python HTTP server in daemon thread to satisfy Render health check."""
+    try:
+        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        logger.info("Health check server bound successfully to port %d", port)
+        server.serve_forever()
+    except Exception as e:
+        logger.error("Failed to bind health check server on port %d: %s", port, e)
 
 async def setup_bot_commands(bot: Bot):
     commands = [
@@ -66,13 +72,15 @@ async def main():
         logger.error("BOT_TOKEN is missing in environment/.env! Please set it before running.")
         sys.exit(1)
 
+    # Start background health server for Render / Cloud
+    port_env = os.environ.get("PORT")
+    if port_env and port_env.isdigit():
+        port = int(port_env)
+        t = threading.Thread(target=run_health_server_in_background, args=(port,), daemon=True)
+        t.start()
+
     logger.info("Initializing SQLite database...")
     await db.init_db()
-
-    # If running on Render or any cloud with $PORT, start health server
-    port = int(os.environ.get("PORT", "0"))
-    if port > 0:
-        await start_health_server(port)
 
     bot = Bot(
         token=config.BOT_TOKEN,
