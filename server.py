@@ -4,13 +4,12 @@ import os
 import sys
 import aiohttp
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Update
 
 from config import config
 from database.db import db
@@ -29,29 +28,24 @@ logger = logging.getLogger("server")
 
 bot_task = None
 keep_alive_task = None
-bot_instance: Bot = None
-dp_instance: Dispatcher = None
-
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://recruitment-bot-5i3h.onrender.com").rstrip("/")
-WEBHOOK_URL = f"{RENDER_URL}/webhook"
+bot_instance = None
+dp_instance = None
 
 async def keep_alive_loop():
-    """Keeps Render awake 24/7 by pinging itself every 5 minutes."""
-    ping_url = f"{RENDER_URL}/healthz"
-    await asyncio.sleep(60)
+    """Keeps Render free service awake 24/7 by pinging itself every 3 minutes."""
+    url = os.environ.get("RENDER_EXTERNAL_URL", "https://recruitment-bot-5i3h.onrender.com") + "/healthz"
+    await asyncio.sleep(30)
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(ping_url, timeout=10) as resp:
+                async with session.get(url, timeout=10) as resp:
                     logger.info("Keep-alive self ping: status %d", resp.status)
         except Exception as e:
             logger.debug("Keep-alive ping note: %s", e)
-        await asyncio.sleep(300) # Every 5 minutes
+        await asyncio.sleep(180) # 3 minutes
 
-async def run_bot_worker():
+async def run_bot():
     global bot_instance, dp_instance
-    # Wait 5 seconds for web server to be live
-    await asyncio.sleep(5)
     try:
         logger.info("Initializing SQLite database on Render...")
         await db.init_db()
@@ -61,32 +55,32 @@ async def run_bot_worker():
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
         dp_instance = Dispatcher(storage=MemoryStorage())
+
         dp_instance.include_router(admin_router)
         dp_instance.include_router(bot_router)
 
         await setup_bot_commands(bot_instance)
 
-        # Clear any old webhook and start polling
         try:
             await bot_instance.delete_webhook(drop_pending_updates=True)
         except Exception as e:
-            logger.warning("Webhook delete note: %s", e)
+            logger.warning("Webhook drop: %s", e)
 
-        logger.info("Starting Telegram Bot polling loop on Render...")
+        logger.info("Telegram Bot Polling started successfully on Render!")
         await dp_instance.start_polling(bot_instance, allowed_updates=dp_instance.resolve_used_update_types())
     except asyncio.CancelledError:
-        logger.info("Bot worker cancelled.")
+        logger.info("Bot background task cancelled.")
     except Exception as e:
-        logger.error("Error in bot worker: %s", e, exc_info=True)
+        logger.error("Error in bot background task: %s", e, exc_info=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global bot_task, keep_alive_task
-    logger.info("FastAPI Web Server starting up on Render...")
-    bot_task = asyncio.create_task(run_bot_worker())
+    logger.info("FastAPI Server starting up on Render...")
+    bot_task = asyncio.create_task(run_bot())
     keep_alive_task = asyncio.create_task(keep_alive_loop())
     yield
-    logger.info("FastAPI Web Server shutting down...")
+    logger.info("FastAPI Server shutting down...")
     if bot_task:
         bot_task.cancel()
     if keep_alive_task:
