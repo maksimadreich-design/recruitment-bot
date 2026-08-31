@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Media & temporary video assets from previous project
+*.mp4
+*.webm
+*.wav
+*.mp3
+mixkit_sfx_library/
+freesound_library/
+telegram_vocal_samples/
+sfx_assets/
+tools/
+remotion-vlog/
+
+# SQLite databases
+*.db
+*.sqlite3

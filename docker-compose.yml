@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  recruitment-bot:
+    build: .
+    container_name: ai_recruitment_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./recruitment_bot.db:/app/recruitment_bot.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
