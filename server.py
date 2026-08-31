@@ -3,9 +3,7 @@ import logging
 import os
 import sys
 import aiohttp
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -45,13 +43,29 @@ async def keep_alive_loop():
                 async with session.get(ping_url, timeout=10) as resp:
                     logger.info("Keep-alive ping to %s: %d", ping_url, resp.status)
         except Exception as e:
-            logger.debug("Keep-alive ping: %s", e)
+            logger.debug("Keep-alive ping note: %s", e)
         await asyncio.sleep(300) # Every 5 minutes
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def telegram_webhook_handler(request: web.Request) -> web.Response:
+    """Processes incoming Telegram updates via Webhook."""
+    try:
+        data = await request.json()
+        update = Update.model_validate(data, context={"bot": bot_instance})
+        await dp_instance.feed_update(bot_instance, update)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        logger.error("Error processing update: %s", e, exc_info=True)
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+async def healthz_handler(request: web.Request) -> web.Response:
+    return web.Response(text="OK", content_type="text/plain")
+
+async def root_handler(request: web.Request) -> web.Response:
+    return web.Response(text="OK - AI Recruitment Bot is live 24/7 on Render (Webhook Mode)!", content_type="text/plain")
+
+async def on_startup(app: web.Application):
     global bot_instance, dp_instance, keep_alive_task
-    logger.info("Initializing AI Recruitment Bot on Render...")
+    logger.info("Starting AI Recruitment Bot on Render...")
     await db.init_db()
 
     bot_instance = Bot(
@@ -64,19 +78,20 @@ async def lifespan(app: FastAPI):
 
     await setup_bot_commands(bot_instance)
 
-    # Register Webhook with Telegram
     try:
         await bot_instance.set_webhook(
             url=WEBHOOK_URL,
             drop_pending_updates=True,
             allowed_updates=dp_instance.resolve_used_update_types()
         )
-        logger.info("Telegram Webhook set successfully to %s", WEBHOOK_URL)
+        logger.info("Telegram Webhook set successfully to: %s", WEBHOOK_URL)
     except Exception as e:
         logger.error("Failed to set webhook: %s", e)
 
     keep_alive_task = asyncio.create_task(keep_alive_loop())
-    yield
+
+async def on_shutdown(app: web.Application):
+    global keep_alive_task, bot_instance
     logger.info("Shutting down bot server...")
     if keep_alive_task:
         keep_alive_task.cancel()
@@ -87,29 +102,16 @@ async def lifespan(app: FastAPI):
             pass
         await bot_instance.session.close()
 
-app = FastAPI(title="AI Recruitment Bot", lifespan=lifespan)
-
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    """Processes incoming updates directly from Telegram webhook."""
-    try:
-        data = await request.json()
-        update = Update.model_validate(data, context={"bot": bot_instance})
-        await dp_instance.feed_update(bot_instance, update)
-        return JSONResponse(content={"ok": True})
-    except Exception as e:
-        logger.error("Error processing webhook update: %s", e, exc_info=True)
-        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
-
-@app.get("/", response_class=PlainTextResponse)
-async def root():
-    return "OK - AI Recruitment Bot is live 24/7 on Render (Webhook Mode)!"
-
-@app.get("/healthz", response_class=PlainTextResponse)
-async def healthz():
-    return "OK"
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, telegram_webhook_handler)
+    app.router.add_get("/healthz", healthz_handler)
+    app.router.add_get("/", root_handler)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.environ.get("PORT", "10000"))
-    uvicorn.run("server:app", host="0.0.0.0", port=port)
+    app = create_app()
+    web.run_app(app, host="0.0.0.0", port=port)
